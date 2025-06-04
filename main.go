@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"fmt"
+
+	"strconv"
 
 	"github.com/containerd/containerd/namespaces"
 	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/pkg/oci"
 	zap "go.uber.org/zap"
-	"strconv"
 )
 
 func init() {
@@ -50,6 +53,26 @@ func pullImage(client *containerd.Client, ctx context.Context) error {
 		return err
 	}
 	zap.L().Info("Pulled image", zap.String("name", image.Name()), zap.String("digest", image.Target().Digest.String()), zap.String("size", strconv.FormatInt(imageSize, 10)), zap.String("mediaType", image.Target().MediaType))
+	if err := createContainer(client, image, ctx); err != nil {
+		zap.L().Error("Failed to create container", zap.Error(err))
+	}
 
+	return nil
+}
+
+func createContainer(client *containerd.Client, image containerd.Image, ctx context.Context) error {
+	zap.L().Info("Creating container " + image.Name() + " with snapshot " + fmt.Sprintf("snapshot-%s", image.Name()))
+	container, err := client.NewContainer(
+		ctx,
+		fmt.Sprintf("%s-container", image.Name()),
+		containerd.WithNewSnapshot(fmt.Sprintf("snapshot-%s", image.Name()), image),
+		containerd.WithNewSpec(oci.WithImageConfig(image)),
+	)
+	if err != nil {
+		return err
+	}
+	defer container.Delete(ctx, containerd.WithSnapshotCleanup)
+
+	zap.L().Info("Created container " + image.Name() + " with container ID " + container.ID())
 	return nil
 }
