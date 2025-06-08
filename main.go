@@ -8,6 +8,7 @@ import (
 
 	"github.com/containerd/containerd/namespaces"
 	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/oci"
 	uuid "github.com/google/uuid"
 	zap "go.uber.org/zap"
@@ -77,5 +78,22 @@ func createContainer(client *containerd.Client, image containerd.Image, ctx cont
 	defer container.Delete(ctx, containerd.WithSnapshotCleanup)
 
 	zap.L().Info("Created container " + containerName + " with container ID " + container.ID())
+
+	if err := createTask(client, container, ctx); err != nil {
+		zap.L().Error("Failed to create task for container", zap.Error(err))
+	}
+
+	return nil
+}
+
+func createTask(client *containerd.Client, container containerd.Container, ctx context.Context) error {
+	zap.L().Info("Creating task for container", zap.String("containerID", container.ID()))
+	task, err := container.NewTask(ctx, cio.NewCreator(cio.WithStdio))
+	if err != nil {
+		return err
+	}
+	defer task.Delete(ctx)
+	zap.L().Info("Created task for container", zap.String("containerID", container.ID()), zap.String("taskID", task.ID()))
+
 	return nil
 }
