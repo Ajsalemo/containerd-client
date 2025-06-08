@@ -79,14 +79,14 @@ func createContainer(client *containerd.Client, image containerd.Image, ctx cont
 
 	zap.L().Info("Created container " + containerName + " with container ID " + container.ID())
 
-	if err := createTask(client, container, ctx); err != nil {
+	if err := createTask(container, ctx); err != nil {
 		zap.L().Error("Failed to create task for container", zap.Error(err))
 	}
 
 	return nil
 }
 
-func createTask(client *containerd.Client, container containerd.Container, ctx context.Context) error {
+func createTask(container containerd.Container, ctx context.Context) error {
 	zap.L().Info("Creating task for container", zap.String("containerID", container.ID()))
 	task, err := container.NewTask(ctx, cio.NewCreator(cio.WithStdio))
 	if err != nil {
