@@ -19,6 +19,8 @@ func init() {
 }
 
 func main() {
+	// Connect to containerd
+	zap.L().Info("Establishing connection to containerd via /run/containerd.sock...")
 	if err := connect(); err != nil {
 		zap.L().Fatal(err.Error())
 	}
@@ -55,6 +57,7 @@ func pullImage(client *containerd.Client, ctx context.Context) error {
 		return err
 	}
 	zap.L().Info("Pulled image", zap.String("name", image.Name()), zap.String("digest", image.Target().Digest.String()), zap.String("size", strconv.FormatInt(imageSize, 10)), zap.String("mediaType", image.Target().MediaType))
+	// Create a container from the image
 	if err := createContainer(client, image, ctx); err != nil {
 		zap.L().Error("Failed to create container", zap.Error(err))
 	}
@@ -78,7 +81,7 @@ func createContainer(client *containerd.Client, image containerd.Image, ctx cont
 	defer container.Delete(ctx, containerd.WithSnapshotCleanup)
 
 	zap.L().Info("Created container " + containerName + " with container ID " + container.ID())
-
+	// Create a task for the container
 	if err := createTask(container, ctx); err != nil {
 		zap.L().Error("Failed to create task for container", zap.Error(err))
 	}
@@ -94,6 +97,27 @@ func createTask(container containerd.Container, ctx context.Context) error {
 	}
 	defer task.Delete(ctx)
 	zap.L().Info("Created task for container", zap.String("containerID", container.ID()), zap.String("taskID", task.ID()))
+
+	// Run the task
+	if err := runTask(task, ctx); err != nil {
+		zap.L().Error("Failed to run task", zap.Error(err))
+	}
+
+	return nil
+}
+
+func runTask(task containerd.Task, ctx context.Context) error {
+	zap.L().Info("Task started", zap.String("taskID", task.ID()))
+	// First variable is the exit status
+	_, err := task.Wait(ctx)
+	if err != nil {
+		return err
+	}
+
+	zap.L().Info("Starting task", zap.String("taskID", task.ID()))
+	if err := task.Start(ctx); err != nil {
+		return err
+	}
 
 	return nil
 }
