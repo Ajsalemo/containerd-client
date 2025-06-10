@@ -87,6 +87,7 @@ func main() {
 		zap.L().Info("Task started", zap.String("taskID", task.ID()))
 	}
 	// Stop a task. This does NOT delete it. This just puts it into a "Stopped" state
+	// Kill = stopped
 	if *stop && *taskId != "" {
 		zap.L().Info("Stopping task", zap.String("taskId", *taskId))
 
@@ -100,18 +101,20 @@ func main() {
 				zap.L().Error("Failed to get task", zap.Error(err))
 				return
 			}
-
+			// If the task is already stopped, return out of this block
+			// This is pretty much a no-op
 			if c.Process.Status.String() == "STOPPED" {
 				zap.L().Info("Task is already stopped", zap.String("taskId", *taskId))
 				return
 			}
-			zap.L().Error("Failed to kill task", zap.Error(err))
+			zap.L().Error("Failed to stop task", zap.Error(err))
 			return
 		}
 
 		zap.L().Info("Task stopped", zap.String("taskId", *taskId))
 	}
 	// Delete a task (after stopping it)
+	// TODO: Make sure the task is stopped before deleting it
 	if *delete && *taskId != "" {
 		zap.L().Info("Deleting task", zap.String("taskId", *taskId))
 
