@@ -86,17 +86,30 @@ func main() {
 		}
 		zap.L().Info("Task started", zap.String("taskID", task.ID()))
 	}
-	// Stop a task.  This does NOT delete it. This just puts it into a "Stopped" state
+	// Stop a task. This does NOT delete it. This just puts it into a "Stopped" state
 	if *stop && *taskId != "" {
 		zap.L().Info("Stopping task", zap.String("taskId", *taskId))
 
 		clientTask := client.TaskService()
 		_, err := clientTask.Kill(ctx, &tasks.KillRequest{ContainerID: string(*taskId), Signal: 15})
 		if err != nil {
+			// If the task is already stopped, this will return an error
+			// Check if this is in a `STOPPED` state
+			c, err := clientTask.Get(ctx, &tasks.GetRequest{ContainerID: string(*taskId)})
+			if err != nil {
+				zap.L().Error("Failed to get task", zap.Error(err))
+				return
+			}
+
+			if c.Process.Status.String() == "STOPPED" {
+				zap.L().Info("Task is already stopped", zap.String("taskId", *taskId))
+				return
+			}
 			zap.L().Error("Failed to kill task", zap.Error(err))
 			return
 		}
-		zap.L().Info("Killed task", zap.String("taskId", *taskId))
+
+		zap.L().Info("Task stopped", zap.String("taskId", *taskId))
 	}
 	// Delete a task (after stopping it)
 	if *delete && *taskId != "" {
