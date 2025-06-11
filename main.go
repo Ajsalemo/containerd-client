@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/containerd/containerd/api/services/tasks/v1"
 	"github.com/containerd/containerd/namespaces"
@@ -117,13 +118,67 @@ func main() {
 	// TODO: Make sure the task is stopped before deleting it
 	if *delete && *taskId != "" {
 		zap.L().Info("Deleting task", zap.String("taskId", *taskId))
-
 		clientTask := client.TaskService()
-		_, err := clientTask.Delete(ctx, &tasks.DeleteTaskRequest{ContainerID: string(*taskId)})
+		// Check if this is in a `STOPPED` state
+		c, err := clientTask.Get(ctx, &tasks.GetRequest{ContainerID: string(*taskId)})
 		if err != nil {
-			zap.L().Error("Failed to delete task", zap.Error(err))
+			zap.L().Error("Failed to get task", zap.Error(err))
 			return
 		}
-		zap.L().Info("Deleted task", zap.String("taskId", *taskId))
+		if c.Process.Status.String() == "STOPPED" {
+			zap.L().Info("Task is already in a stopped state, deleting..", zap.String("taskId", *taskId))
+			_, err := clientTask.Delete(ctx, &tasks.DeleteTaskRequest{ContainerID: string(*taskId)})
+			if err != nil {
+				zap.L().Error("Failed to delete task", zap.Error(err))
+				return
+			}
+			zap.L().Info("Deleted task", zap.String("taskId", *taskId))
+			return
+		} else {
+			zap.L().Error("Task is not stopped, cannot delete. Stopping task before deletion.", zap.String("taskId", *taskId), zap.String("status", c.Process.Status.String()))
+			// Stop the task before deleting it
+			_, err := clientTask.Kill(ctx, &tasks.KillRequest{ContainerID: string(*taskId), Signal: 15})
+			if err != nil {
+				zap.L().Error("Failed to stop task before deletion", zap.Error(err))
+				return
+			}
+			// The below loop interates every .5 seconds for 30 seconds to poll for task deletion
+			// A task may not immediately stop after task.Delete() is called
+			timeout := time.After(30 * time.Second)
+			ticker := time.Tick(500 * time.Millisecond)
+
+			for {
+				// Wait for the task to be stopped
+				c, err := clientTask.Get(ctx, &tasks.GetRequest{ContainerID: string(*taskId)})
+				if err != nil {
+					zap.L().Error("Failed to get task", zap.Error(err))
+					return
+				}
+
+				select {
+				case <-timeout:
+					zap.L().Error("Timeout of 30 seconds was hit waiting on task to be stopped before deletion. Unable to stop task.", zap.String("taskId", *taskId))
+					return
+				case <-ticker:
+					if c.Process.Status.String() == "STOPPED" {
+						zap.L().Info("Task successfully stopped before deletion", zap.String("taskId", *taskId))
+						d, err := clientTask.Delete(ctx, &tasks.DeleteTaskRequest{ContainerID: string(*taskId)})
+
+						if err != nil {
+							zap.L().Error("Failed to delete task after stopping it", zap.Error(err))
+							return
+						}
+						// Log out the exit code from the task
+						zap.L().Info("Task deletion response", zap.String("taskId", *taskId), zap.Int32("exitStatus", int32(d.ExitStatus)))
+						// Check if there was an exit code. If so, the task was successfully deleted
+						if int32(d.ExitStatus) >= 0 {
+							zap.L().Info("Deleted task", zap.String("taskId", *taskId))
+							return
+						}
+					}
+					zap.L().Info("Polling status of the task to ensure it's stopped before deletion..", zap.String("taskId", *taskId))
+				}
+			}
+		}
 	}
 }
