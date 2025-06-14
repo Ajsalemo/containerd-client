@@ -23,8 +23,11 @@ func init() {
 func main() {
 	// Parse command line flags
 	stop := flag.Bool("stop", false, "Stop the running task")
-	delete := flag.Bool("delete", false, "Delete the task after stopping it")
+	deleteTask := flag.Bool("delete-task", false, "Delete the task after stopping it")
+	deleteContainer := flag.Bool("delete-container", false, "Delete the container")
+	containerId := flag.String("container", "", "Container ID to delete")
 	taskId := flag.String("task", "", "Task ID to stop")
+	listContainers := flag.Bool("list-containers", false, "List all containers")
 	run := flag.Bool("run", false, "Run the task after creating it")
 	flag.Parse()
 	ctx := namespaces.WithNamespace(context.Background(), "default")
@@ -115,8 +118,7 @@ func main() {
 		zap.L().Info("Task stopped", zap.String("taskId", *taskId))
 	}
 	// Delete a task (after stopping it)
-	// TODO: Make sure the task is stopped before deleting it
-	if *delete && *taskId != "" {
+	if *deleteTask && *taskId != "" {
 		zap.L().Info("Deleting task", zap.String("taskId", *taskId))
 		clientTask := client.TaskService()
 		// Check if this is in a `STOPPED` state
@@ -179,6 +181,45 @@ func main() {
 					zap.L().Info("Polling status of the task to ensure it's stopped before deletion..", zap.String("taskId", *taskId))
 				}
 			}
+		}
+	}
+	// Delete a container
+	if *deleteContainer && *containerId != "" {
+		zap.L().Info("Deleting container", zap.String("container", *containerId))
+		container, err := client.LoadContainer(ctx, *containerId)
+		if err != nil {
+			zap.L().Error("Failed to load container", zap.Error(err))
+			return
+		}
+		if err := container.Delete(ctx, containerd.WithSnapshotCleanup); err != nil {
+			zap.L().Error("Failed to delete container", zap.Error(err))
+			return
+		}
+		zap.L().Info("Deleted container", zap.String("container", *containerId))
+	}
+	// List all containers
+	if *listContainers {
+		zap.L().Info("Listing all containers")
+		containers, err := client.Containers(ctx)
+		if err != nil {
+			zap.L().Error("Failed to list containers", zap.Error(err))
+			return
+		}
+		for _, c := range containers {
+			// Get the image for the container
+			image, err := c.Image(ctx)
+			if err != nil {
+				zap.L().Error("Failed to get image for container", zap.Error(err))
+				continue
+			}
+			// Get the container info
+			// This is being used to pull out the container runtime information - eg. io.containerd.runc.v2
+			info, err := c.Info(ctx)
+			if err != nil {
+				zap.L().Error("Failed to get container info for container", zap.Error(err))
+				continue
+			}
+			zap.L().Info("Container", zap.String("id", c.ID()), zap.String("image", image.Name()), zap.String("runtime", info.Runtime.Name))
 		}
 	}
 }
