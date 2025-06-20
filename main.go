@@ -27,6 +27,7 @@ func main() {
 	deleteContainer := flag.Bool("delete-container", false, "Delete the container")
 	containerId := flag.String("container", "", "Container ID to delete")
 	taskId := flag.String("task", "", "Task ID to stop")
+	image := flag.String("image", "", "Image to pull and run")
 	listContainers := flag.Bool("list-containers", false, "List all containers")
 	run := flag.Bool("run", false, "Run the task after creating it")
 	flag.Parse()
@@ -38,6 +39,11 @@ func main() {
 	}
 	// Run - this executes most lifecycle events for container and task creation
 	if *run {
+		// If an image isn't provided then fail immediately
+		if *image == "" {
+			zap.L().Error("No image provided to run. Use the --image flag to specify an image to pull and run.")
+			return
+		}
 		defer client.Close()
 		containerdVersion, err := client.Version(context.Background())
 		if err != nil {
@@ -46,7 +52,7 @@ func main() {
 		zap.L().Info("Connected to containerd", zap.String("version", containerdVersion.Version), zap.String("revision", containerdVersion.Revision), zap.String("socket", "/run/containerd/containerd.sock"))
 		// Pull an image
 		zap.L().Info("Pulling image..")
-		image, err := client.Pull(ctx, "docker.io/library/redis:alpine", containerd.WithPullUnpack)
+		image, err := client.Pull(ctx, *image, containerd.WithPullUnpack)
 		if err != nil {
 			return
 		}
@@ -80,14 +86,13 @@ func main() {
 		}
 		defer task.Delete(ctx)
 		zap.L().Info("Created task for container", zap.String("containerID", container.ID()), zap.String("taskID", task.ID()))
-		// Run the task
-		zap.L().Info("Task started", zap.String("taskID", task.ID()))
 		// First variable is the exit status
 		task.Wait(ctx)
 		// call start on the task to execute the redis server
 		if err := task.Start(ctx); err != nil {
 			return
 		}
+		// Run the task
 		zap.L().Info("Task started", zap.String("taskID", task.ID()))
 	}
 	// Stop a task. This does NOT delete it. This just puts it into a "Stopped" state
