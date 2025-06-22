@@ -4,7 +4,10 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/containerd/containerd/api/services/tasks/v1"
@@ -30,11 +33,13 @@ func main() {
 	image := flag.String("image", "", "Image to pull and run")
 	listContainers := flag.Bool("list-containers", false, "List all containers")
 	run := flag.Bool("run", false, "Run the task after creating it")
+	tail := flag.Bool("tail", false, "Tail the logs of the task")
 	flag.Parse()
 	ctx := namespaces.WithNamespace(context.Background(), "default")
 
 	client, err := containerd.New("/run/containerd/containerd.sock")
 	if err != nil {
+		zap.L().Error("Failed to connect to containerd", zap.Error(err))
 		return
 	}
 	// Run - this executes most lifecycle events for container and task creation
@@ -47,6 +52,7 @@ func main() {
 		defer client.Close()
 		containerdVersion, err := client.Version(context.Background())
 		if err != nil {
+			zap.L().Error("Failed to get containerd version", zap.Error(err))
 			return
 		}
 		zap.L().Info("Connected to containerd", zap.String("version", containerdVersion.Version), zap.String("revision", containerdVersion.Revision), zap.String("socket", "/run/containerd/containerd.sock"))
@@ -54,11 +60,13 @@ func main() {
 		zap.L().Info("Pulling image..")
 		image, err := client.Pull(ctx, *image, containerd.WithPullUnpack)
 		if err != nil {
+			zap.L().Error("Failed to pull image", zap.Error(err))
 			return
 		}
 
 		imageSize, err := image.Size(ctx)
 		if err != nil {
+			zap.L().Error("Failed to get image size", zap.Error(err))
 			return
 		}
 		zap.L().Info("Pulled image", zap.String("name", image.Name()), zap.String("digest", image.Target().Digest.String()), zap.String("size", strconv.FormatInt(imageSize, 10)), zap.String("mediaType", image.Target().MediaType))
@@ -73,6 +81,7 @@ func main() {
 			containerd.WithNewSpec(oci.WithImageConfig(image)),
 		)
 		if err != nil {
+			zap.L().Error("Failed to create container", zap.Error(err))
 			return
 		}
 		defer container.Delete(ctx, containerd.WithSnapshotCleanup)
@@ -82,6 +91,7 @@ func main() {
 		zap.L().Info("Creating task for container", zap.String("containerID", container.ID()))
 		task, err := container.NewTask(ctx, cio.NewCreator(cio.WithStdio))
 		if err != nil {
+			zap.L().Error("Failed to create task", zap.Error(err))
 			return
 		}
 		defer task.Delete(ctx)
@@ -90,6 +100,7 @@ func main() {
 		task.Wait(ctx)
 		// call start on the task to execute the redis server
 		if err := task.Start(ctx); err != nil {
+			zap.L().Error("Failed to start task", zap.Error(err))
 			return
 		}
 		// Run the task
@@ -226,5 +237,48 @@ func main() {
 			}
 			zap.L().Info("Container", zap.String("id", c.ID()), zap.String("image", image.Name()), zap.String("runtime", info.Runtime.Name))
 		}
+	}
+	// Attach to a container to view logs
+	if *tail && *containerId != "" {
+		container, err := client.LoadContainer(ctx, *containerId)
+		if err != nil {
+			zap.L().Error("Failed to load container", zap.Error(err))
+			return
+		}
+
+		task, err := container.Task(ctx, cio.NewAttach(cio.WithStdio))
+		if err != nil {
+			zap.L().Error("Failed to load task", zap.Error(err))
+			return
+		}
+
+		zap.L().Info("Attaching to task", zap.String("taskId", task.ID()), zap.String("containerId", container.ID()))
+		// At this point, logs from the container should be streaming to stdout
+		// Block using select {} until the user does an interrupt - CTRL + C / SIGTERM / etc.
+		// Notify the application of the below signals to be handled on shutdown
+		s := make(chan os.Signal, 1)
+		signal.Notify(s,
+			syscall.SIGINT,
+			syscall.SIGTERM,
+			syscall.SIGQUIT)
+		// Goroutine to clean up prior to shutting down
+		go func() {
+			sig := <-s
+			switch sig {
+			case os.Interrupt:
+				zap.L().Warn("CTRL+C / os.Interrupt recieved, shutting log streaming..")
+				os.Exit(0)
+			case syscall.SIGTERM:
+				zap.L().Warn("SIGTERM recieved.., shutting log streaming..")
+				os.Exit(0)
+			case syscall.SIGQUIT:
+				zap.L().Warn("SIGQUIT recieved.., shutting log streaming..")
+				os.Exit(0)
+			case syscall.SIGINT:
+				zap.L().Warn("SIGINT recieved.., shutting log streaming..")
+				os.Exit(0)
+			}
+		}()
+		select {}
 	}
 }
