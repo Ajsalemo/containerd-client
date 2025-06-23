@@ -9,6 +9,14 @@ require (
 )
 
 require (
+	github.com/containerd/go-cni v1.1.12 // indirect
+	github.com/containernetworking/cni v1.3.0 // indirect
+	github.com/containernetworking/plugins v1.7.1 // indirect
+	github.com/petermattis/goid v0.0.0-20240813172612-4fcff4a6cae7 // indirect
+	github.com/sasha-s/go-deadlock v0.3.5 // indirect
+)
+
+require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/Microsoft/hcsshim v0.13.0 // indirect
 	github.com/containerd/cgroups/v3 v3.0.5 // indirect

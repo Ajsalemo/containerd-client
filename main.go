@@ -16,7 +16,10 @@ import (
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/oci"
 	uuid "github.com/google/uuid"
+	"github.com/opencontainers/runtime-spec/specs-go"
 	zap "go.uber.org/zap"
+
+	gocni "github.com/containerd/go-cni"
 )
 
 func init() {
@@ -73,12 +76,56 @@ func main() {
 		// Create a container
 		u := uuid.New()
 		containerName := fmt.Sprintf("container-%s", u.String())
+		// POC - set up a cni network for the container
+		// Setup network for namespace.
+		labels := map[string]string{
+			"IgnoreUnknown": "1",
+		}
+		// Setup port mapping capability
+		portMapping := []gocni.PortMapping{
+			{
+				HostPort:      8080,
+				ContainerPort: 80,
+				Protocol:      "tcp",
+				HostIP:        "0.0.0.0",
+			},
+		}
+		// Initialize gocni
+		cni, err := gocni.New(
+			// one for loopback network interface
+			gocni.WithMinNetworkCount(2),
+			gocni.WithPluginConfDir("/etc/cni/net.d"),
+			gocni.WithPluginDir([]string{"/opt/cni/bin"}),
+		)
+		if err != nil {
+			zap.L().Error("Failed to initialize CNI", zap.Error(err))
+			return
+		}
+		// Load the CNI configuration
+		if err := cni.Load(gocni.WithLoNetwork, gocni.WithDefaultConf); err != nil {
+			zap.L().Error("Failed to load CNI configuration", zap.Error(err))
+			return
+		}
+		netns := "/proc/64276/ns/net"
+		zap.L().Info(netns)
+		_, err2 := cni.Setup(ctx, "test", netns, gocni.WithLabels(labels), gocni.WithCapabilityPortMap(portMapping))
+		if err2 != nil {
+			zap.L().Error("Failed to setup CNI network", zap.Error(err2))
+			return
+		}
+		// ------------------------------------------------------------------------------------ //
 		zap.L().Info("Creating container " + containerName + " with snapshot " + fmt.Sprintf("snapshot-%s", u.String()))
 		container, err := client.NewContainer(
 			ctx,
 			containerName,
 			containerd.WithNewSnapshot(fmt.Sprintf("snapshot-%s", u.String()), image),
-			containerd.WithNewSpec(oci.WithImageConfig(image)),
+			containerd.WithNewSpec(
+				oci.WithImageConfig(image),
+				oci.WithLinuxNamespace(specs.LinuxNamespace{
+					Type: specs.NetworkNamespace,
+					Path: netns,
+				}),
+			),
 		)
 		if err != nil {
 			zap.L().Error("Failed to create container", zap.Error(err))
