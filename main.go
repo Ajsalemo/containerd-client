@@ -15,11 +15,9 @@ import (
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/oci"
-	uuid "github.com/google/uuid"
-	"github.com/opencontainers/runtime-spec/specs-go"
-	zap "go.uber.org/zap"
-
 	gocni "github.com/containerd/go-cni"
+	uuid "github.com/google/uuid"
+	zap "go.uber.org/zap"
 )
 
 func init() {
@@ -39,6 +37,7 @@ func main() {
 	tail := flag.Bool("tail", false, "Tail the logs of the task")
 	flag.Parse()
 	ctx := namespaces.WithNamespace(context.Background(), "default")
+	netNsCtx := context.Background()
 
 	client, err := containerd.New("/run/containerd/containerd.sock")
 	if err != nil {
@@ -76,7 +75,7 @@ func main() {
 		// Create a container
 		u := uuid.New()
 		containerName := fmt.Sprintf("container-%s", u.String())
-		// POC - set up a cni network for the container
+		// ---------------- POC - set up a cni network for the container ------------------- //
 		// Setup network for namespace.
 		labels := map[string]string{
 			"IgnoreUnknown": "1",
@@ -96,6 +95,7 @@ func main() {
 			gocni.WithMinNetworkCount(2),
 			gocni.WithPluginConfDir("/etc/cni/net.d"),
 			gocni.WithPluginDir([]string{"/opt/cni/bin"}),
+			gocni.WithInterfacePrefix("eth"),
 		)
 		if err != nil {
 			zap.L().Error("Failed to initialize CNI", zap.Error(err))
@@ -106,13 +106,6 @@ func main() {
 			zap.L().Error("Failed to load CNI configuration", zap.Error(err))
 			return
 		}
-		netns := "/proc/64276/ns/net"
-		zap.L().Info(netns)
-		_, err2 := cni.Setup(ctx, "test", netns, gocni.WithLabels(labels), gocni.WithCapabilityPortMap(portMapping))
-		if err2 != nil {
-			zap.L().Error("Failed to setup CNI network", zap.Error(err2))
-			return
-		}
 		// ------------------------------------------------------------------------------------ //
 		zap.L().Info("Creating container " + containerName + " with snapshot " + fmt.Sprintf("snapshot-%s", u.String()))
 		container, err := client.NewContainer(
@@ -121,16 +114,13 @@ func main() {
 			containerd.WithNewSnapshot(fmt.Sprintf("snapshot-%s", u.String()), image),
 			containerd.WithNewSpec(
 				oci.WithImageConfig(image),
-				oci.WithLinuxNamespace(specs.LinuxNamespace{
-					Type: specs.NetworkNamespace,
-					Path: netns,
-				}),
 			),
 		)
 		if err != nil {
 			zap.L().Error("Failed to create container", zap.Error(err))
 			return
 		}
+
 		defer container.Delete(ctx, containerd.WithSnapshotCleanup)
 
 		zap.L().Info("Created container " + containerName + " with container ID " + container.ID())
@@ -152,6 +142,19 @@ func main() {
 		}
 		// Run the task
 		zap.L().Info("Task started", zap.String("taskID", task.ID()))
+		// Construct a path to the network namespace for the pid
+		netNsPath := fmt.Sprintf("/proc/%d/ns/net", task.Pid())
+
+		zap.L().Info("Network namespace path", zap.String("netNsPath", netNsPath))
+
+		result, err2 := cni.Setup(netNsCtx, containerName, netNsPath, gocni.WithLabels(labels), gocni.WithCapabilityPortMap(portMapping))
+		if err2 != nil {
+			zap.L().Error("Failed to setup CNI network", zap.Error(err2))
+			return
+		}
+		zap.L().Info("CNI network setup for container", zap.String("containerName", containerName), zap.String("networkNamespace", netNsPath))
+
+		zap.L().Info(result.Interfaces["eth0"].IPConfigs[0].IP.String())
 	}
 	// Stop a task. This does NOT delete it. This just puts it into a "Stopped" state
 	// Kill = stopped

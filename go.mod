@@ -3,7 +3,7 @@ module github.com/Ajsalemo/containerd-client
 go 1.23.4
 
 require (
-	github.com/containerd/containerd v1.7.23
+	github.com/containerd/containerd v1.7.27
 	github.com/containerd/containerd/v2 v2.1.1
 	go.uber.org/zap v1.27.0
 )
@@ -12,6 +12,7 @@ require (
 	github.com/containerd/go-cni v1.1.12 // indirect
 	github.com/containernetworking/cni v1.3.0 // indirect
 	github.com/containernetworking/plugins v1.7.1 // indirect
+	github.com/moby/sys/symlink v0.3.0 // indirect
 	github.com/petermattis/goid v0.0.0-20240813172612-4fcff4a6cae7 // indirect
 	github.com/sasha-s/go-deadlock v0.3.5 // indirect
 )
