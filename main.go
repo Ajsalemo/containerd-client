@@ -37,7 +37,6 @@ func main() {
 	tail := flag.Bool("tail", false, "Tail the logs of the task")
 	flag.Parse()
 	ctx := namespaces.WithNamespace(context.Background(), "default")
-	netNsCtx := context.Background()
 
 	client, err := containerd.New("/run/containerd/containerd.sock")
 	if err != nil {
@@ -75,18 +74,13 @@ func main() {
 		// Create a container
 		u := uuid.New()
 		containerName := fmt.Sprintf("container-%s", u.String())
-		// ---------------- POC - set up a cni network for the container ------------------- //
-		// Setup network for namespace.
-		labels := map[string]string{
-			"IgnoreUnknown": "1",
-		}
 		// Setup port mapping capability
 		portMapping := []gocni.PortMapping{
 			{
-				HostPort:      8080,
+				HostPort:      8888,
 				ContainerPort: 80,
 				Protocol:      "tcp",
-				HostIP:        "0.0.0.0",
+				HostIP:        "127.0.0.1",
 			},
 		}
 		// Initialize gocni
@@ -147,7 +141,7 @@ func main() {
 
 		zap.L().Info("Network namespace path", zap.String("netNsPath", netNsPath))
 
-		result, err2 := cni.Setup(netNsCtx, containerName, netNsPath, gocni.WithLabels(labels), gocni.WithCapabilityPortMap(portMapping))
+		result, err2 := cni.Setup(ctx, containerName, netNsPath, gocni.WithCapabilityPortMap(portMapping))
 		if err2 != nil {
 			zap.L().Error("Failed to setup CNI network", zap.Error(err2))
 			return

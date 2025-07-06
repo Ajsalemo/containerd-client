@@ -1,0 +1,22 @@
+{
+  "cniVersion": "1.1.0",
+  "cniVersions": ["0.3.1", "0.4.0", "1.0.0", "1.1.0"],
+  "name": "mynet",
+  "plugins": [
+    {
+      "type": "bridge",
+      "bridge": "cni1",
+      "ipam": {
+        "type": "host-local",
+        "subnet": "10.1.0.0/16",
+        "routes": [
+            {"dst": "0.0.0.0/0"}
+        ]
+      }
+    },
+    {
+        "type": "portmap",
+        "capabilities": {"portMappings": true}
+    }
+  ]
+}
