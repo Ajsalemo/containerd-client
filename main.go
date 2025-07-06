@@ -35,6 +35,9 @@ func main() {
 	listContainers := flag.Bool("list-containers", false, "List all containers")
 	run := flag.Bool("run", false, "Run the task after creating it")
 	tail := flag.Bool("tail", false, "Tail the logs of the task")
+	hostPort := flag.Int("port", 8888, "Port to map from the host to the container")
+	containerPort := flag.Int("container-port", 80, "Container port - the port the container will listen on")
+	portMap := flag.Bool("port-map", false, "Enable port mapping from a host port to a container port")
 	flag.Parse()
 	ctx := namespaces.WithNamespace(context.Background(), "default")
 
