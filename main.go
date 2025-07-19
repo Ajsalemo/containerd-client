@@ -116,24 +116,15 @@ func main() {
 				HostPort:      8788,
 				ContainerPort: 80,
 				Protocol:      "tcp",
-				HostIP:        "10.10.0.01",
+				HostIP:        "127.0.0.1",
 			},
 		}
-		// subnet to access the container
-		ipRanges := []gocni.IPRanges{
-			{
-				Subnet:     "10.0.0.0/24",
-				Gateway:    "10.0.0.1",
-				RangeStart: "10.0.0.2",
-				RangeEnd:   "10.0.0.254",
-			},
-		}
-
 		// Initialize gocni
 		cni, err := gocni.New(
 			// one for loopback network interface
 			gocni.WithMinNetworkCount(2),
 			gocni.WithPluginConfDir("/etc/cni/net.d"),
+			gocni.WithConfListFile("/etc/cni/net.d/10-net.conflist"),
 			gocni.WithPluginDir([]string{"/opt/cni/bin"}),
 			gocni.WithInterfacePrefix("eth"),
 		)
@@ -187,7 +178,7 @@ func main() {
 
 		zap.L().Info("Network namespace path", zap.String("netNsPath", netNsPath))
 
-		result, err2 := cni.Setup(ctx, containerName, netNsPath, gocni.WithCapabilityPortMap(portMapping), gocni.WithCapabilityIPRanges(ipRanges))
+		result, err2 := cni.Setup(ctx, containerName, netNsPath, gocni.WithCapabilityPortMap(portMapping))
 		if err2 != nil {
 			zap.L().Error("Failed to setup CNI network", zap.Error(err2))
 			return

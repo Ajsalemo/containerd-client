@@ -3,16 +3,29 @@
   "name": "mynet",
   "plugins": [
         {
-            "cniVersion": "0.2.0",
             "name": "lo",
-            "type": "loopback"
+            "type": "loopback",
             "sysctl": {
-                "net.ipv4.conf.mynet0.route_localnet": true
+                "net.ipv4.conf.lo.route_localnet": true
             }
+        },
+        {
+            "type": "bridge",
+            "bridge": "mynet0",
+            "ipam": {
+                "type": "host-local",
+                "subnet": "10.10.0.0/16",
+                "routes": [
+                    {"dst": "0.0.0.0/0"}
+                ]
+            }        
         },
         {
             "type": "portmap",
             "capabilities": {"portMappings": true},
+            "sysctl": {
+                "net.ipv4.conf.mynet0.route_localnet": true
+            }
         }
     ]
 }
