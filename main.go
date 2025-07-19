@@ -35,11 +35,12 @@ func main() {
 	listContainers := flag.Bool("list-containers", false, "List all containers")
 	run := flag.Bool("run", false, "Run the task after creating it")
 	tail := flag.Bool("tail", false, "Tail the logs of the task")
-	hostPort := flag.Int("port", 8888, "Port to map from the host to the container")
-	containerPort := flag.Int("container-port", 80, "Container port - the port the container will listen on")
-	portMap := flag.Bool("port-map", false, "Enable port mapping from a host port to a container port")
+	// hostPort := flag.String("host-port", "", "Port to map from the host to the container")
+	// containerPort := flag.String("container-port", "", "Container port - the port the container will listen on")
+	// portMap := flag.Bool("port-map", false, "Enable port mapping from a host port to a container port")
 	flag.Parse()
 	ctx := namespaces.WithNamespace(context.Background(), "default")
+	// var portMapping []gocni.PortMapping
 
 	client, err := containerd.New("/run/containerd/containerd.sock")
 	if err != nil {
@@ -77,15 +78,57 @@ func main() {
 		// Create a container
 		u := uuid.New()
 		containerName := fmt.Sprintf("container-%s", u.String())
-		// Setup port mapping capability
+		// Setup port mapping capability if its enabled
+		// if *portMap {
+		// 	zap.L().Info("Port mapping enabled", zap.String("hostPort", *hostPort), zap.String("containerPort", *containerPort))
+		// 	// Check if hostPort is not provided
+		// 	if *hostPort == "" {
+		// 		zap.L().Warn("No host port provided. A default of 8888 will be used for the host port. Use the --hostPort flag to specify a host port to map to the container port.")
+		// 	}
+		// 	// Check if containerPort is not provided
+		// 	if *containerPort == "" {
+		// 		zap.L().Warn("No container port provided. A default of 80 will be used for the container port. Use the --containerPort flag to specify a container port to map from the host port.")
+		// 	}
+		// 	// Convert hostPort (type str) into an integer
+		// 	hostPort, err := strconv.ParseInt(*hostPort, 10, 32)
+		// 	if err != nil {
+		// 		zap.L().Error("Invalid host port provided to map. Use the --host-port flag to specify a valid host port to map to the container port.")
+		// 		return
+		// 	}
+		// 	// Convert containerPort (type str) into an integer
+		// 	containerPort, err := strconv.ParseInt(*containerPort, 10, 32)
+		// 	if err != nil {
+		// 		zap.L().Error("Invalid container port provided to map. Use the --container-port flag to specify a valid container port to map from the host port.")
+		// 		return
+		// 	}
+
+		// 	portMapping = []gocni.PortMapping{
+		// 		{
+		// 			HostPort:      int32(hostPort),
+		// 			ContainerPort: int32(containerPort),
+		// 			Protocol:      "tcp",
+		// 			HostIP:        "127.0.0.1",
+		// 		},
+		// 	}
+		// }
 		portMapping := []gocni.PortMapping{
 			{
-				HostPort:      8888,
+				HostPort:      8788,
 				ContainerPort: 80,
 				Protocol:      "tcp",
-				HostIP:        "127.0.0.1",
+				HostIP:        "10.10.0.01",
 			},
 		}
+		// subnet to access the container
+		ipRanges := []gocni.IPRanges{
+			{
+				Subnet:     "10.0.0.0/24",
+				Gateway:    "10.0.0.1",
+				RangeStart: "10.0.0.2",
+				RangeEnd:   "10.0.0.254",
+			},
+		}
+
 		// Initialize gocni
 		cni, err := gocni.New(
 			// one for loopback network interface
@@ -144,7 +187,7 @@ func main() {
 
 		zap.L().Info("Network namespace path", zap.String("netNsPath", netNsPath))
 
-		result, err2 := cni.Setup(ctx, containerName, netNsPath, gocni.WithCapabilityPortMap(portMapping))
+		result, err2 := cni.Setup(ctx, containerName, netNsPath, gocni.WithCapabilityPortMap(portMapping), gocni.WithCapabilityIPRanges(ipRanges))
 		if err2 != nil {
 			zap.L().Error("Failed to setup CNI network", zap.Error(err2))
 			return

@@ -1,0 +1,18 @@
+{
+  "cniVersion": "1.0.0",
+  "name": "mynet",
+  "plugins": [
+        {
+            "cniVersion": "0.2.0",
+            "name": "lo",
+            "type": "loopback"
+            "sysctl": {
+                "net.ipv4.conf.mynet0.route_localnet": true
+            }
+        },
+        {
+            "type": "portmap",
+            "capabilities": {"portMappings": true},
+        }
+    ]
+}
