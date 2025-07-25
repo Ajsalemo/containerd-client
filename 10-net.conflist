@@ -11,20 +11,23 @@
         },
         {
             "type": "bridge",
-            "bridge": "mynet0",
+            "bridge": "cni0",
             "ipam": {
                 "type": "host-local",
                 "subnet": "10.10.0.0/16",
                 "routes": [
                     {"dst": "0.0.0.0/0"}
                 ]
-            }        
+            },
+            "sysctl": {
+                "net.ipv4.conf.cni0.route_localnet": true
+            } 
         },
         {
             "type": "portmap",
             "capabilities": {"portMappings": true},
             "sysctl": {
-                "net.ipv4.conf.mynet0.route_localnet": true
+                "net.ipv4.conf.cni0.route_localnet": true
             }
         }
     ]

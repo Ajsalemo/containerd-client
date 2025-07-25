@@ -35,12 +35,12 @@ func main() {
 	listContainers := flag.Bool("list-containers", false, "List all containers")
 	run := flag.Bool("run", false, "Run the task after creating it")
 	tail := flag.Bool("tail", false, "Tail the logs of the task")
-	// hostPort := flag.String("host-port", "", "Port to map from the host to the container")
-	// containerPort := flag.String("container-port", "", "Container port - the port the container will listen on")
-	// portMap := flag.Bool("port-map", false, "Enable port mapping from a host port to a container port")
+	hostPort := flag.String("host-port", "", "Port to map from the host to the container")
+	containerPort := flag.String("container-port", "", "Container port - the port the container will listen on")
+	portMap := flag.Bool("port-map", false, "Enable port mapping from a host port to a container port")
 	flag.Parse()
 	ctx := namespaces.WithNamespace(context.Background(), "default")
-	// var portMapping []gocni.PortMapping
+	var portMapping []gocni.PortMapping
 
 	client, err := containerd.New("/run/containerd/containerd.sock")
 	if err != nil {
@@ -79,46 +79,52 @@ func main() {
 		u := uuid.New()
 		containerName := fmt.Sprintf("container-%s", u.String())
 		// Setup port mapping capability if its enabled
-		// if *portMap {
-		// 	zap.L().Info("Port mapping enabled", zap.String("hostPort", *hostPort), zap.String("containerPort", *containerPort))
-		// 	// Check if hostPort is not provided
-		// 	if *hostPort == "" {
-		// 		zap.L().Warn("No host port provided. A default of 8888 will be used for the host port. Use the --hostPort flag to specify a host port to map to the container port.")
-		// 	}
-		// 	// Check if containerPort is not provided
-		// 	if *containerPort == "" {
-		// 		zap.L().Warn("No container port provided. A default of 80 will be used for the container port. Use the --containerPort flag to specify a container port to map from the host port.")
-		// 	}
-		// 	// Convert hostPort (type str) into an integer
-		// 	hostPort, err := strconv.ParseInt(*hostPort, 10, 32)
-		// 	if err != nil {
-		// 		zap.L().Error("Invalid host port provided to map. Use the --host-port flag to specify a valid host port to map to the container port.")
-		// 		return
-		// 	}
-		// 	// Convert containerPort (type str) into an integer
-		// 	containerPort, err := strconv.ParseInt(*containerPort, 10, 32)
-		// 	if err != nil {
-		// 		zap.L().Error("Invalid container port provided to map. Use the --container-port flag to specify a valid container port to map from the host port.")
-		// 		return
-		// 	}
+		// TODO - add network cleanup
+		// If iptable rules pile up and arent eventually cleaned up - this may cause weird routing problems
+		// Notably with portmapping failing to map from localhost to the container port. we'll get a 'connection refused' error
+		// Even though the container ip on the cni0 bridge is reachable
+		if *portMap {
+			zap.L().Info("Port mapping enabled", zap.String("hostPort", *hostPort), zap.String("containerPort", *containerPort))
+			// Check if hostPort is not provided
+			if *hostPort == "" {
+				zap.L().Warn("No host port provided. A default of 8888 will be used for the host port. Use the --hostPort flag to specify a host port to map to the container port.")
+			}
+			// Check if containerPort is not provided
+			if *containerPort == "" {
+				zap.L().Warn("No container port provided. A default of 80 will be used for the container port. Use the --containerPort flag to specify a container port to map from the host port.")
+			}
+			// Convert hostPort (type str) into an integer
+			hostPort, err := strconv.ParseInt(*hostPort, 10, 32)
+			if err != nil {
+				zap.L().Error("Invalid host port provided to map. Use the --host-port flag to specify a valid host port to map to the container port.")
+				return
+			}
+			// Convert containerPort (type str) into an integer
+			containerPort, err := strconv.ParseInt(*containerPort, 10, 32)
+			if err != nil {
+				zap.L().Error("Invalid container port provided to map. Use the --container-port flag to specify a valid container port to map from the host port.")
+				return
+			}
 
-		// 	portMapping = []gocni.PortMapping{
-		// 		{
-		// 			HostPort:      int32(hostPort),
-		// 			ContainerPort: int32(containerPort),
-		// 			Protocol:      "tcp",
-		// 			HostIP:        "127.0.0.1",
-		// 		},
-		// 	}
-		// }
-		portMapping := []gocni.PortMapping{
-			{
-				HostPort:      8788,
-				ContainerPort: 80,
-				Protocol:      "tcp",
-				HostIP:        "127.0.0.1",
-			},
+			zap.L().Info("Using port mapping", zap.Int32("hostPort", int32(hostPort)), zap.Int32("containerPort", int32(containerPort)))
+			// Set up user defined port mapping
+			portMapping = []gocni.PortMapping{
+				{
+					HostPort:      int32(hostPort),
+					ContainerPort: int32(containerPort),
+					Protocol:      "tcp",
+					HostIP:        "0.0.0.0",
+				},
+			}
 		}
+		// portMapping := []gocni.PortMapping{
+		// 	{
+		// 		HostPort:      8788,
+		// 		ContainerPort: 80,
+		// 		Protocol:      "tcp",
+		// 		HostIP:        "0.0.0.0",
+		// 	},
+		// }
 		// Initialize gocni
 		cni, err := gocni.New(
 			// one for loopback network interface
