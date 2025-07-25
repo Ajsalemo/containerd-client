@@ -16,14 +16,15 @@ install_cni_plugin() {
   tmp_dir=$(mktemp -d '/tmp/cni-plugins.XXXXX')
 
   # clone and build
-  git clone "${git_repo}" "${tmp_dir}/plugins"
+  sudo git clone "${git_repo}" "${tmp_dir}/plugins"
   cd "${tmp_dir}/plugins"
-  git checkout "${git_commit}"
-  ./build_linux.sh
+  sudo git checkout "${git_commit}"
+  export PATH=$PATH:/usr/local/go/bin
+  bash ${tmp_dir}/plugins/build_linux.sh
 
   # install binary
   sudo mkdir -p "${CNI_DIR}"
-  sudo cp -r ./bin "${CNI_DIR}"
+  sudo cp -r ${tmp_dir}/plugins/bin "${CNI_DIR}"
 
   sudo rm -rf "${tmp_dir}"
 }
