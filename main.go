@@ -346,8 +346,17 @@ func main() {
 		// Check the CNI network for this container
 		cniErr := cni.Check(ctx, container.ID(), ns)
 		if cniErr != nil {
-			zap.L().Error("Failed to check container network", zap.Error(cniErr))
+			zap.L().Warn("Failed to find a container network. Container may not have been created with portmapping enabled", zap.Error(cniErr))
 			return
+		} else {
+			zap.L().Info("A cni network was found for this container, deleting it", zap.String("network namespace", ns), zap.String("containerID", container.ID()))
+			// Delete the cni0 network this container was attached to when the container is deleted
+			// Only run this if Check() returns without an err since that indicates a network is present
+			if err := cni.Remove(ctx, container.ID(), ns); err != nil {
+				zap.L().Error("Failed to remove CNI network for container", zap.Error(err))
+			}
+
+			zap.L().Info("Removed CNI network for container", zap.String("containerID", container.ID()))
 		}
 
 		if err := container.Delete(ctx, containerd.WithSnapshotCleanup); err != nil {
