@@ -5,8 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -16,12 +18,34 @@ import (
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/oci"
 	gocni "github.com/containerd/go-cni"
+	"github.com/containernetworking/cni/pkg/version"
 	uuid "github.com/google/uuid"
 	zap "go.uber.org/zap"
 )
 
 func init() {
 	zap.ReplaceGlobals(zap.Must(zap.NewProduction()))
+}
+
+func initGoCni() (gocni.CNI, error) {
+	// Initialize gocni
+	cni, err := gocni.New(
+		// one for loopback network interface
+		gocni.WithMinNetworkCount(2),
+		gocni.WithPluginConfDir("/etc/cni/net.d"),
+		gocni.WithConfListFile("/etc/cni/net.d/10-net.conflist"),
+		gocni.WithPluginDir([]string{"/opt/cni/bin"}),
+		gocni.WithInterfacePrefix("eth"),
+	)
+	if err != nil {
+		zap.L().Error("Failed to initialize CNI", zap.Error(err))
+	}
+	// Load the CNI configuration
+	if err := cni.Load(gocni.WithLoNetwork, gocni.WithDefaultConf); err != nil {
+		zap.L().Error("Failed to load CNI configuration", zap.Error(err))
+	}
+
+	return cni, err
 }
 
 func main() {
@@ -40,13 +64,21 @@ func main() {
 	portMap := flag.Bool("port-map", false, "Enable port mapping from a host port to a container port")
 	flag.Parse()
 	ctx := namespaces.WithNamespace(context.Background(), "default")
+	// Set up port mapping to an empty struct here
+	// If a user wants to use portmapping - user defined args will be added to this struct and passed in as a capability later on
+	// Else, it'll remain empty - which is okay
 	var portMapping []gocni.PortMapping
-
 	client, err := containerd.New("/run/containerd/containerd.sock")
 	if err != nil {
 		zap.L().Error("Failed to connect to containerd", zap.Error(err))
 		return
 	}
+
+	zap.L().Info("Connected to containerd", zap.String("socket", "/run/containerd/containerd.sock"))
+	// Check the current CNI version
+	v := version.Current()
+	zap.L().Info("CNI Version", zap.String("version", v))
+
 	// Run - this executes most lifecycle events for container and task creation
 	if *run {
 		// If an image isn't provided then fail immediately
@@ -117,33 +149,7 @@ func main() {
 				},
 			}
 		}
-		// portMapping := []gocni.PortMapping{
-		// 	{
-		// 		HostPort:      8788,
-		// 		ContainerPort: 80,
-		// 		Protocol:      "tcp",
-		// 		HostIP:        "0.0.0.0",
-		// 	},
-		// }
-		// Initialize gocni
-		cni, err := gocni.New(
-			// one for loopback network interface
-			gocni.WithMinNetworkCount(2),
-			gocni.WithPluginConfDir("/etc/cni/net.d"),
-			gocni.WithConfListFile("/etc/cni/net.d/10-net.conflist"),
-			gocni.WithPluginDir([]string{"/opt/cni/bin"}),
-			gocni.WithInterfacePrefix("eth"),
-		)
-		if err != nil {
-			zap.L().Error("Failed to initialize CNI", zap.Error(err))
-			return
-		}
-		// Load the CNI configuration
-		if err := cni.Load(gocni.WithLoNetwork, gocni.WithDefaultConf); err != nil {
-			zap.L().Error("Failed to load CNI configuration", zap.Error(err))
-			return
-		}
-		// ------------------------------------------------------------------------------------ //
+
 		zap.L().Info("Creating container " + containerName + " with snapshot " + fmt.Sprintf("snapshot-%s", u.String()))
 		container, err := client.NewContainer(
 			ctx,
@@ -183,11 +189,34 @@ func main() {
 		netNsPath := fmt.Sprintf("/proc/%d/ns/net", task.Pid())
 
 		zap.L().Info("Network namespace path", zap.String("netNsPath", netNsPath))
-
-		result, err2 := cni.Setup(ctx, containerName, netNsPath, gocni.WithCapabilityPortMap(portMapping))
-		if err2 != nil {
-			zap.L().Error("Failed to setup CNI network", zap.Error(err2))
+		// Initialize gocni so we have a reference to it
+		// New() needs to be called, else this will be a nil dereference
+		cni, err := initGoCni()
+		if err != nil {
+			zap.L().Error("Failed to initialize CNI", zap.Error(err))
 			return
+		}
+		// Setup networking for the container
+		// Pass portmapping capabilities in if it's defined to be used by the user
+		result, err := cni.Setup(ctx, containerName, netNsPath, gocni.WithCapabilityPortMap(portMapping))
+		if err != nil {
+			zap.L().Error("Failed to setup CNI network", zap.Error(err))
+			return
+		}
+		// There seems to be a problem where cni0 isn't setup with an ipv4 address
+		// This can be seen with `ifconfig`. Not sure if this is a problem with how I'm setting up the cni bridge or not
+		// To be safe, add the subnet to the cni0 bridge - 10-net.conflist still handles everything else
+		bridgeSetupCmd := exec.Command("ip", "addr", "show", "cni0")
+		if output, err := bridgeSetupCmd.Output(); err == nil {
+			if !strings.Contains(string(output), "10.10.0.1/16") {
+				zap.L().Info("Adding gateway IP to cni0 bridge")
+				addIPCmd := exec.Command("ip", "addr", "add", "10.10.0.1/16", "dev", "cni0")
+				if err := addIPCmd.Run(); err != nil {
+					zap.L().Warn("Failed to add IP to cni0 bridge (may already exist)", zap.Error(err))
+				}
+			}
+
+			zap.L().Info("cni0 bridge already has gateway IP of 10.10.0.1/16, skipping 'ip address add 10.10.0.1/16 dev cni0'")
 		}
 		zap.L().Info("CNI network setup for container", zap.String("containerName", containerName), zap.String("networkNamespace", netNsPath))
 
@@ -294,6 +323,33 @@ func main() {
 			zap.L().Error("Failed to load container", zap.Error(err))
 			return
 		}
+		// Get the container ID to pass into the the Check() function later on
+		// Get the PID of the task running for this container
+		cTaskToDelete, err := container.Task(ctx, nil)
+		if err != nil {
+			zap.L().Error("Failed to get task for container", zap.Error(err))
+			return
+		}
+		// Get the PID of the task running for this container
+		pid := cTaskToDelete.Pid()
+		// Construct a path to the network namespace for the pid
+		// This is the pid associated with the task of the container we want to delete - and is what network ns the container is created in if defined
+		ns := fmt.Sprintf("/proc/%d/ns/net", pid)
+		zap.L().Info("Network namespace path for container", zap.String("ns", ns))
+		// Initialize gocni so we have a reference to it
+		// New() needs to be called, else this will be a nil dereference
+		cni, err := initGoCni()
+		if err != nil {
+			zap.L().Error("Failed to initialize CNI", zap.Error(err))
+			return
+		}
+		// Check the CNI network for this container
+		cniErr := cni.Check(ctx, container.ID(), ns)
+		if cniErr != nil {
+			zap.L().Error("Failed to check container network", zap.Error(cniErr))
+			return
+		}
+
 		if err := container.Delete(ctx, containerd.WithSnapshotCleanup); err != nil {
 			zap.L().Error("Failed to delete container", zap.Error(err))
 			return
