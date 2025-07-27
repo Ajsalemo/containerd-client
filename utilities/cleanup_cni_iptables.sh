@@ -119,7 +119,7 @@ if [ -n "$remaining_rules" ]; then
     # Final verification
     final_check=$(sudo iptables-save | grep -i cni || true)
     if [ -z "$final_check" ]; then
-        echo "✓ All CNI iptables rules have been successfully removed after aggressive cleanup."
+        echo "✓ All CNI iptables rules have been successfully removed after cleanup."
     else
         echo "⚠ Some persistent CNI rules remain:"
         echo "$final_check"
@@ -128,4 +128,4 @@ else
     echo "✓ All CNI iptables rules have been successfully removed."
 fi
 
-echo "Comprehensive CNI iptables cleanup completed."
+echo "CNI iptables cleanup completed."

@@ -48,6 +48,79 @@ func initGoCni() (gocni.CNI, error) {
 	return cni, err
 }
 
+// Delete a containerd task
+// This will:
+// 1. Check if the task is already in a STOPPED state. If it is, then delete the task
+// 2. If it's not STOPPED, call stop on the task
+// 3. Since some tasks (eg. processes) may not respond to SIGTERM right away, poll the task status every 500ms for 30 seconds
+// 4. If it hasn't stoppedd after 30 seconds, return an error
+// 5. Else, the task has been stopped and then call delete on it
+func deleteContainerdTask(ctx context.Context, client *containerd.Client, taskId string) {
+	zap.L().Info("Deleting task", zap.String("taskId", taskId))
+	clientTask := client.TaskService()
+	// Check if this is in a `STOPPED` state
+	c, err := clientTask.Get(ctx, &tasks.GetRequest{ContainerID: string(taskId)})
+	if err != nil {
+		zap.L().Error("Failed to get task", zap.Error(err))
+		return
+	}
+	if c.Process.Status.String() == "STOPPED" {
+		zap.L().Info("Task is already in a stopped state, deleting..", zap.String("taskId", taskId))
+		_, err := clientTask.Delete(ctx, &tasks.DeleteTaskRequest{ContainerID: string(taskId)})
+		if err != nil {
+			zap.L().Error("Failed to delete task", zap.Error(err))
+			return
+		}
+		zap.L().Info("Deleted task", zap.String("taskId", taskId))
+		return
+	} else {
+		zap.L().Error("Task is not stopped, cannot delete. Stopping task before deletion.", zap.String("taskId", taskId), zap.String("status", c.Process.Status.String()))
+		// Stop the task before deleting it
+		_, err := clientTask.Kill(ctx, &tasks.KillRequest{ContainerID: string(taskId), Signal: 15})
+		if err != nil {
+			zap.L().Error("Failed to stop task before deletion", zap.Error(err))
+			return
+		}
+		// The below loop interates every .5 seconds for 30 seconds to poll for task deletion
+		// A task may not immediately stop after task.Delete() is called
+		timeout := time.After(30 * time.Second)
+		ticker := time.Tick(500 * time.Millisecond)
+
+		for {
+			// Wait for the task to be stopped
+			c, err := clientTask.Get(ctx, &tasks.GetRequest{ContainerID: string(taskId)})
+			if err != nil {
+				zap.L().Error("Failed to get task", zap.Error(err))
+				return
+			}
+
+			select {
+			case <-timeout:
+				zap.L().Error("Timeout of 30 seconds was hit waiting on task to be stopped before deletion. Unable to stop task.", zap.String("taskId", taskId))
+				return
+			case <-ticker:
+				if c.Process.Status.String() == "STOPPED" {
+					zap.L().Info("Task successfully stopped before deletion", zap.String("taskId", taskId))
+					d, err := clientTask.Delete(ctx, &tasks.DeleteTaskRequest{ContainerID: string(taskId)})
+
+					if err != nil {
+						zap.L().Error("Failed to delete task after stopping it", zap.Error(err))
+						return
+					}
+					// Log out the exit code from the task
+					zap.L().Info("Task deletion response", zap.String("taskId", taskId), zap.Int32("exitStatus", int32(d.ExitStatus)))
+					// Check if there was an exit code. If so, the task was successfully deleted
+					if int32(d.ExitStatus) >= 0 {
+						zap.L().Info("Deleted task", zap.String("taskId", taskId))
+						return
+					}
+				}
+				zap.L().Info("Polling status of the task to ensure it's stopped before deletion..", zap.String("taskId", taskId))
+			}
+		}
+	}
+}
+
 func main() {
 	// Parse command line flags
 	stop := flag.Bool("stop", false, "Stop the running task")
@@ -251,69 +324,7 @@ func main() {
 	}
 	// Delete a task (after stopping it)
 	if *deleteTask && *taskId != "" {
-		zap.L().Info("Deleting task", zap.String("taskId", *taskId))
-		clientTask := client.TaskService()
-		// Check if this is in a `STOPPED` state
-		c, err := clientTask.Get(ctx, &tasks.GetRequest{ContainerID: string(*taskId)})
-		if err != nil {
-			zap.L().Error("Failed to get task", zap.Error(err))
-			return
-		}
-		if c.Process.Status.String() == "STOPPED" {
-			zap.L().Info("Task is already in a stopped state, deleting..", zap.String("taskId", *taskId))
-			_, err := clientTask.Delete(ctx, &tasks.DeleteTaskRequest{ContainerID: string(*taskId)})
-			if err != nil {
-				zap.L().Error("Failed to delete task", zap.Error(err))
-				return
-			}
-			zap.L().Info("Deleted task", zap.String("taskId", *taskId))
-			return
-		} else {
-			zap.L().Error("Task is not stopped, cannot delete. Stopping task before deletion.", zap.String("taskId", *taskId), zap.String("status", c.Process.Status.String()))
-			// Stop the task before deleting it
-			_, err := clientTask.Kill(ctx, &tasks.KillRequest{ContainerID: string(*taskId), Signal: 15})
-			if err != nil {
-				zap.L().Error("Failed to stop task before deletion", zap.Error(err))
-				return
-			}
-			// The below loop interates every .5 seconds for 30 seconds to poll for task deletion
-			// A task may not immediately stop after task.Delete() is called
-			timeout := time.After(30 * time.Second)
-			ticker := time.Tick(500 * time.Millisecond)
-
-			for {
-				// Wait for the task to be stopped
-				c, err := clientTask.Get(ctx, &tasks.GetRequest{ContainerID: string(*taskId)})
-				if err != nil {
-					zap.L().Error("Failed to get task", zap.Error(err))
-					return
-				}
-
-				select {
-				case <-timeout:
-					zap.L().Error("Timeout of 30 seconds was hit waiting on task to be stopped before deletion. Unable to stop task.", zap.String("taskId", *taskId))
-					return
-				case <-ticker:
-					if c.Process.Status.String() == "STOPPED" {
-						zap.L().Info("Task successfully stopped before deletion", zap.String("taskId", *taskId))
-						d, err := clientTask.Delete(ctx, &tasks.DeleteTaskRequest{ContainerID: string(*taskId)})
-
-						if err != nil {
-							zap.L().Error("Failed to delete task after stopping it", zap.Error(err))
-							return
-						}
-						// Log out the exit code from the task
-						zap.L().Info("Task deletion response", zap.String("taskId", *taskId), zap.Int32("exitStatus", int32(d.ExitStatus)))
-						// Check if there was an exit code. If so, the task was successfully deleted
-						if int32(d.ExitStatus) >= 0 {
-							zap.L().Info("Deleted task", zap.String("taskId", *taskId))
-							return
-						}
-					}
-					zap.L().Info("Polling status of the task to ensure it's stopped before deletion..", zap.String("taskId", *taskId))
-				}
-			}
-		}
+		deleteContainerdTask(ctx, client, *taskId)
 	}
 	// Delete a container
 	if *deleteContainer && *containerId != "" {
@@ -323,7 +334,6 @@ func main() {
 			zap.L().Error("Failed to load container", zap.Error(err))
 			return
 		}
-		// Get the container ID to pass into the the Check() function later on
 		// Get the PID of the task running for this container
 		cTaskToDelete, err := container.Task(ctx, nil)
 		if err != nil {
@@ -343,27 +353,22 @@ func main() {
 			zap.L().Error("Failed to initialize CNI", zap.Error(err))
 			return
 		}
-		// Check the CNI network for this container
-		cniErr := cni.Check(ctx, container.ID(), ns)
-		if cniErr != nil {
-			zap.L().Warn("Failed to find a container network. Container may not have been created with portmapping enabled", zap.Error(cniErr))
-			return
-		} else {
-			zap.L().Info("A cni network was found for this container, deleting it", zap.String("network namespace", ns), zap.String("containerID", container.ID()))
-			// Delete the cni0 network this container was attached to when the container is deleted
-			// Only run this if Check() returns without an err since that indicates a network is present
-			if err := cni.Remove(ctx, container.ID(), ns); err != nil {
-				zap.L().Error("Failed to remove CNI network for container", zap.Error(err))
-			}
-
-			zap.L().Info("Removed CNI network for container", zap.String("containerID", container.ID()))
-		}
-
+		// Delete the task before deleting the container - this also stops the task prior to task deletion
+		// Stopping the task is required before calling container delete or else container deletion will fail
+		deleteContainerdTask(ctx, client, *containerId)
+		// Delete the container
 		if err := container.Delete(ctx, containerd.WithSnapshotCleanup); err != nil {
 			zap.L().Error("Failed to delete container", zap.Error(err))
 			return
 		}
 		zap.L().Info("Deleted container", zap.String("container", *containerId))
+		// After container deletion remove the CNI network
+		// Delete the cni0 network this container was attached to when the container is deleted
+		if err := cni.Remove(ctx, container.ID(), ns); err != nil {
+			zap.L().Error("Failed to remove CNI network for container", zap.Error(err))
+		}
+
+		zap.L().Info("Removed CNI network for container", zap.String("containerID", container.ID()), zap.String("networkNamespace", ns))
 	}
 	// List all containers
 	if *listContainers {
