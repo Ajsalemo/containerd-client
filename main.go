@@ -159,6 +159,16 @@ func main() {
 			zap.L().Error("No image provided to run. Use the --image flag to specify an image to pull and run.")
 			return
 		}
+		// Return an error is --host or --container port is provided without the --port-map flag
+		if (*hostPort != "" || *containerPort != "") && !*portMap {
+			zap.L().Error("Cannot use --host-port or --container-port without the --port-map flag. Use the --port-map flag to enable port mapping from a host port to a container port.")
+			return
+		}
+		// Return an error for any other flags provided
+		if *stop || *deleteTask || *deleteContainer || *listContainers || *tail {
+			zap.L().Error("Cannot run a task with the --stop, --delete-task, --delete-container, --list-containers or --tail flags. Use the --run flag to run a task and provide an image with --image.")
+			return
+		}
 		defer client.Close()
 		containerdVersion, err := client.Version(context.Background())
 		if err != nil {
@@ -192,11 +202,13 @@ func main() {
 			zap.L().Info("Port mapping enabled", zap.String("hostPort", *hostPort), zap.String("containerPort", *containerPort))
 			// Check if hostPort is not provided
 			if *hostPort == "" {
-				zap.L().Warn("No host port provided. A default of 8888 will be used for the host port. Use the --hostPort flag to specify a host port to map to the container port.")
+				zap.L().Error("No host port provided. Use the --hostPort flag to specify a host port to map to the container port.")
+				return
 			}
 			// Check if containerPort is not provided
 			if *containerPort == "" {
-				zap.L().Warn("No container port provided. A default of 80 will be used for the container port. Use the --containerPort flag to specify a container port to map from the host port.")
+				zap.L().Error("No container port provided. Use the --containerPort flag to specify a container port to map from the host port.")
+				return
 			}
 			// Convert hostPort (type str) into an integer
 			hostPort, err := strconv.ParseInt(*hostPort, 10, 32)
