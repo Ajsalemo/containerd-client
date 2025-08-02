@@ -15,6 +15,7 @@ import (
 	"github.com/containerd/containerd/api/services/tasks/v1"
 	"github.com/containerd/containerd/namespaces"
 	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/core/remotes/docker"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/oci"
 	gocni "github.com/containerd/go-cni"
@@ -48,6 +49,8 @@ func initGoCni() (gocni.CNI, error) {
 	return cni, err
 }
 
+//	TODO - need force kill tasks if they haven't responded after 30 seconds
+//
 // Delete a containerd task
 // This will:
 // 1. Check if the task is already in a STOPPED state. If it is, then delete the task
@@ -128,13 +131,15 @@ func main() {
 	deleteContainer := flag.Bool("delete-container", false, "Delete the container")
 	containerId := flag.String("container", "", "Container ID to delete")
 	taskId := flag.String("task", "", "Task ID to stop")
-	image := flag.String("image", "", "Image to pull and run")
+	containerImage := flag.String("image", "", "Image to pull and run")
 	listContainers := flag.Bool("list-containers", false, "List all containers")
 	run := flag.Bool("run", false, "Run the task after creating it")
 	tail := flag.Bool("tail", false, "Tail the logs of the task")
 	hostPort := flag.String("host-port", "", "Port to map from the host to the container")
 	containerPort := flag.String("container-port", "", "Container port - the port the container will listen on")
 	portMap := flag.Bool("port-map", false, "Enable port mapping from a host port to a container port")
+	registryUsername := flag.String("registry-username", "", "Username for the container registry")
+	registryPassword := flag.String("registry-password", "", "Password for the container registry")
 	flag.Parse()
 	ctx := namespaces.WithNamespace(context.Background(), "default")
 	// Set up port mapping to an empty struct here
@@ -155,7 +160,7 @@ func main() {
 	// Run - this executes most lifecycle events for container and task creation
 	if *run {
 		// If an image isn't provided then fail immediately
-		if *image == "" {
+		if *containerImage == "" {
 			zap.L().Error("No image provided to run. Use the --image flag to specify an image to pull and run.")
 			return
 		}
@@ -176,12 +181,32 @@ func main() {
 			return
 		}
 		zap.L().Info("Connected to containerd", zap.String("version", containerdVersion.Version), zap.String("revision", containerdVersion.Revision), zap.String("socket", "/run/containerd/containerd.sock"))
-		// Pull an image
-		zap.L().Info("Pulling image..")
-		image, err := client.Pull(ctx, *image, containerd.WithPullUnpack)
-		if err != nil {
-			zap.L().Error("Failed to pull image", zap.Error(err))
-			return
+		// Image is defined up here to be used if a public or private registry is set
+		var image containerd.Image
+		// Pull an authenticated image from a private registry
+		if *registryUsername != "" && *registryPassword != "" {
+			zap.L().Info("Pulling image from private registry", zap.String("image", *containerImage))
+			// Resolver is used to authenticate pulls through  private registries
+			resolver := docker.NewResolver(docker.ResolverOptions{
+				Credentials: func(host string) (string, string, error) {
+					return *registryUsername, *registryPassword, nil
+				},
+			})
+			// Note to self - the containerd.WithResolver() for v2 clients expects github.com/containerd/containerd/v2/core/remotes/docker
+			// There will be a type mismatch if you try to use github.com/containerd/containerd/remotes/docker
+			image, err = client.Pull(ctx, *containerImage, containerd.WithPullUnpack, containerd.WithResolver(resolver))
+			if err != nil {
+				zap.L().Error("Failed to pull image", zap.Error(err))
+				return
+			}
+		} else {
+			// Pull an image from public registry
+			zap.L().Info("Pulling image from public registry", zap.String("image", *containerImage))
+			image, err = client.Pull(ctx, *containerImage, containerd.WithPullUnpack)
+			if err != nil {
+				zap.L().Error("Failed to pull image", zap.Error(err))
+				return
+			}
 		}
 
 		imageSize, err := image.Size(ctx)
@@ -194,7 +219,6 @@ func main() {
 		u := uuid.New()
 		containerName := fmt.Sprintf("container-%s", u.String())
 		// Setup port mapping capability if its enabled
-		// TODO - add network cleanup
 		// If iptable rules pile up and arent eventually cleaned up - this may cause weird routing problems
 		// Notably with portmapping failing to map from localhost to the container port. we'll get a 'connection refused' error
 		// Even though the container ip on the cni0 bridge is reachable
@@ -304,7 +328,6 @@ func main() {
 			zap.L().Info("cni0 bridge already has gateway IP of 10.10.0.1/16, skipping 'ip address add 10.10.0.1/16 dev cni0'")
 		}
 		zap.L().Info("CNI network setup for container", zap.String("containerName", containerName), zap.String("networkNamespace", netNsPath))
-
 		zap.L().Info(result.Interfaces["eth0"].IPConfigs[0].IP.String())
 	}
 	// Stop a task. This does NOT delete it. This just puts it into a "Stopped" state
