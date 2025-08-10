@@ -100,6 +100,31 @@ func deleteContainerdTask(ctx context.Context, client *containerd.Client, taskId
 			select {
 			case <-timeout:
 				zap.L().Error("Timeout of 30 seconds was hit waiting on task to be stopped before deletion. Unable to stop task.", zap.String("taskId", taskId))
+				zap.L().Error("Force killing task with SIGKILL", zap.String("taskId", taskId))
+				// Kill the task with SIGKILL (signal 9) - https://www.man7.org/linux/man-pages/man7/signal.7.html
+				_, err := clientTask.Kill(ctx, &tasks.KillRequest{ContainerID: string(taskId), Signal: 9})
+				if err != nil {
+					zap.L().Error("Failed to force kill task", zap.Error(err))
+					return
+				}
+				zap.L().Info("Force killed task", zap.String("taskId", taskId))
+				// Wait 1 second prior to running delete to make sure the task `STATUS` has changed to `STOPPED`
+				zap.L().Info("Waiting 1 second before deleting task after force kill", zap.String("taskId", taskId))
+				time.Sleep(1 * time.Second)
+				// Delete the task after killing it
+				d, err := clientTask.Delete(ctx, &tasks.DeleteTaskRequest{ContainerID: string(taskId)})
+				if err != nil {
+					zap.L().Error("Failed to delete task after force killing it", zap.Error(err))
+					return
+				}
+				// Log out the exit code from the task
+				zap.L().Info("Task deletion response", zap.String("taskId", taskId), zap.Int32("exitStatus", int32(d.ExitStatus)))
+				// Check if there was an exit code. If so, the task was successfully deleted
+				if int32(d.ExitStatus) >= 0 {
+					zap.L().Info("Deleted task", zap.String("taskId", taskId))
+					return
+				}
+
 				return
 			case <-ticker:
 				if c.Process.Status.String() == "STOPPED" {
@@ -372,38 +397,51 @@ func main() {
 		// Get the PID of the task running for this container
 		cTaskToDelete, err := container.Task(ctx, nil)
 		if err != nil {
-			zap.L().Error("Failed to get task for container", zap.Error(err))
-			return
-		}
-		// Get the PID of the task running for this container
-		pid := cTaskToDelete.Pid()
-		// Construct a path to the network namespace for the pid
-		// This is the pid associated with the task of the container we want to delete - and is what network ns the container is created in if defined
-		ns := fmt.Sprintf("/proc/%d/ns/net", pid)
-		zap.L().Info("Network namespace path for container", zap.String("ns", ns))
-		// Initialize gocni so we have a reference to it
-		// New() needs to be called, else this will be a nil dereference
-		cni, err := initGoCni()
-		if err != nil {
-			zap.L().Error("Failed to initialize CNI", zap.Error(err))
-			return
-		}
-		// Delete the task before deleting the container - this also stops the task prior to task deletion
-		// Stopping the task is required before calling container delete or else container deletion will fail
-		deleteContainerdTask(ctx, client, *containerId)
-		// Delete the container
-		if err := container.Delete(ctx, containerd.WithSnapshotCleanup); err != nil {
-			zap.L().Error("Failed to delete container", zap.Error(err))
-			return
-		}
-		zap.L().Info("Deleted container", zap.String("container", *containerId))
-		// After container deletion remove the CNI network
-		// Delete the cni0 network this container was attached to when the container is deleted
-		if err := cni.Remove(ctx, container.ID(), ns); err != nil {
-			zap.L().Error("Failed to remove CNI network for container", zap.Error(err))
-		}
+			// There may be a case where there is no task associated with the container (eg. deleted already)
+			// If so, skip to deleting the container
+			if strings.Contains(err.Error(), "no running task found") {
+				zap.L().Warn("No running task found for container, skipping task deletion and deleting the container", zap.String("containerId", *containerId))
+				// Delete the container
+				if err := container.Delete(ctx, containerd.WithSnapshotCleanup); err != nil {
+					zap.L().Error("Failed to delete container", zap.Error(err))
+					return
+				}
+				zap.L().Info("Deleted container", zap.String("container", *containerId))
+			} else {
+				zap.L().Error("Failed to get task for container", zap.Error(err))
+				return
+			}
+		} else {
+			// Get the PID of the task running for this container
+			pid := cTaskToDelete.Pid()
+			// Construct a path to the network namespace for the pid
+			// This is the pid associated with the task of the container we want to delete - and is what network ns the container is created in if defined
+			ns := fmt.Sprintf("/proc/%d/ns/net", pid)
+			zap.L().Info("Network namespace path for container", zap.String("ns", ns))
+			// Initialize gocni so we have a reference to it
+			// New() needs to be called, else this will be a nil dereference
+			cni, err := initGoCni()
+			if err != nil {
+				zap.L().Error("Failed to initialize CNI", zap.Error(err))
+				return
+			}
+			// Delete the task before deleting the container - this also stops the task prior to task deletion
+			// Stopping the task is required before calling container delete or else container deletion will fail
+			deleteContainerdTask(ctx, client, *containerId)
+			// Delete the container
+			if err := container.Delete(ctx, containerd.WithSnapshotCleanup); err != nil {
+				zap.L().Error("Failed to delete container", zap.Error(err))
+				return
+			}
+			zap.L().Info("Deleted container", zap.String("container", *containerId))
+			// After container deletion remove the CNI network
+			// Delete the cni0 network this container was attached to when the container is deleted
+			if err := cni.Remove(ctx, container.ID(), ns); err != nil {
+				zap.L().Error("Failed to remove CNI network for container", zap.Error(err))
+			}
 
-		zap.L().Info("Removed CNI network for container", zap.String("containerID", container.ID()), zap.String("networkNamespace", ns))
+			zap.L().Info("Removed CNI network for container", zap.String("containerID", container.ID()), zap.String("networkNamespace", ns))
+		}
 	}
 	// List all containers
 	if *listContainers {
