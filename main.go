@@ -49,8 +49,6 @@ func initGoCni() (gocni.CNI, error) {
 	return cni, err
 }
 
-//	TODO - need force kill tasks if they haven't responded after 30 seconds
-//
 // Delete a containerd task
 // This will:
 // 1. Check if the task is already in a STOPPED state. If it is, then delete the task
