@@ -443,13 +443,25 @@ func main() {
 	}
 	// List all containers
 	if *listContainers {
+		// Don't allow any other flag to be passed in
+		if *stop || *deleteTask || *deleteContainer || *containerId != "" || *taskId != "" || *containerImage != "" || *run || *tail || *hostPort != "" || *containerPort != "" || *portMap || *registryUsername != "" || *registryPassword != "" {
+			zap.L().Error("Unrecognized flag passed to --list-containers")
+			return
+		}
 		zap.L().Info("Listing all containers")
 		containers, err := client.Containers(ctx)
 		if err != nil {
 			zap.L().Error("Failed to list containers", zap.Error(err))
 			return
 		}
+		// If there isn't any containers, return early
+		if len(containers) == 0 {
+			zap.L().Info("No containers found")
+			return
+		}
 		for _, c := range containers {
+			// Return early if there isn't any containers found
+
 			// Get the image for the container
 			image, err := c.Image(ctx)
 			if err != nil {
