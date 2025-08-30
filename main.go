@@ -393,7 +393,7 @@ func main() {
 	// Delete a container
 	if *deleteContainer && *containerId != "" {
 		// Don't allow any other flag to be passed in
-		if *stop || *deleteTask || *containerId != "" || *taskId != "" || *containerImage != "" || *run || *tail || *hostPort != "" || *containerPort != "" || *portMap || *registryUsername != "" || *registryPassword != "" {
+		if *stop || *deleteTask || *containerId == "" || *taskId != "" || *containerImage != "" || *run || *tail || *hostPort != "" || *containerPort != "" || *portMap || *registryUsername != "" || *registryPassword != "" {
 			zap.L().Error("Unrecognized flag passed to --delete-container")
 			return
 		}
