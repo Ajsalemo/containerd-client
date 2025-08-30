@@ -356,6 +356,12 @@ func main() {
 	// Stop a task. This does NOT delete it. This just puts it into a "Stopped" state
 	// Kill = stopped
 	if *stop && *taskId != "" {
+		// Don't allow any other flag to be passed in
+		if *deleteTask || *deleteContainer || *containerId != "" || *taskId == "" || *containerImage != "" || *run || *tail || *hostPort != "" || *containerPort != "" || *portMap || *registryUsername != "" || *registryPassword != "" {
+			zap.L().Error("Unrecognized flag passed to --stop")
+			return
+		}
+
 		zap.L().Info("Stopping task", zap.String("taskId", *taskId))
 
 		clientTask := client.TaskService()
@@ -386,6 +392,12 @@ func main() {
 	}
 	// Delete a container
 	if *deleteContainer && *containerId != "" {
+		// Don't allow any other flag to be passed in
+		if *stop || *deleteTask || *containerId != "" || *taskId != "" || *containerImage != "" || *run || *tail || *hostPort != "" || *containerPort != "" || *portMap || *registryUsername != "" || *registryPassword != "" {
+			zap.L().Error("Unrecognized flag passed to --delete-container")
+			return
+		}
+
 		zap.L().Info("Deleting container", zap.String("container", *containerId))
 		container, err := client.LoadContainer(ctx, *containerId)
 		if err != nil {
@@ -480,6 +492,11 @@ func main() {
 	}
 	// Attach to a container to view logs
 	if *tail && *containerId != "" {
+		// Don't allow any other flag to be passed in
+		if *stop || *deleteTask || *deleteContainer || *containerId == "" || *taskId != "" || *containerImage != "" || *run || *hostPort != "" || *containerPort != "" || *portMap || *registryUsername != "" || *registryPassword != "" {
+			zap.L().Error("Unrecognized flag passed to --tail")
+			return
+		}
 		container, err := client.LoadContainer(ctx, *containerId)
 		if err != nil {
 			zap.L().Error("Failed to load container", zap.Error(err))
